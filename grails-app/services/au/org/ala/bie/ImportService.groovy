@@ -843,6 +843,7 @@ class ImportService implements GrailsConfigurationAware {
             this.updateProgressBar(lists.size(), listNum)
             String uid = resource.uid
             String solrField = resource.field ?: "conservationStatus_s"
+            String yearSolrField = resource.yearField ?: "conservationStatusEventYear_i"
             String sourceField = resource.sourceField ?: defaultSourceField
             String yearSourceField = resource.yearSourceField ?: defaultYearSourceField
             String kingdomField = resource.kingdomField ?: defaultKingdomField
@@ -855,7 +856,7 @@ class ImportService implements GrailsConfigurationAware {
                 log("Loading list from: " + uid)
                 try {
                     def list = listService.get(uid, [sourceField, kingdomField, phylumField, classField, orderField, familyField, rankField])
-                    updateDocsWithConservationStatus(list, sourceField, solrField, yearSourceField, uid, kingdomField, phylumField, classField, orderField, familyField, rankField, online)
+                    updateDocsWithConservationStatus(list, sourceField, solrField, yearSourceField, yearSolrField, uid, kingdomField, phylumField, classField, orderField, familyField, rankField, online)
                 } catch (Exception ex) {
                     def msg = "Error calling webservice: ${ex.message}"
                     log(msg)
@@ -1031,7 +1032,7 @@ class ImportService implements GrailsConfigurationAware {
      * @param solrFieldName
      * @return
      */
-    private updateDocsWithConservationStatus(List list, String jsonFieldName, String solrFieldName, String yearJsonFieldName, String drUid, String kingdomField, String phylumField, String classField, String orderField, String familyField, String rankField, boolean online) {
+    private updateDocsWithConservationStatus(List list, String jsonFieldName, String solrFieldName, String yearJsonFieldName, String yearSolrField, String drUid, String kingdomField, String phylumField, String classField, String orderField, String familyField, String rankField, boolean online) {
         if (list.size() > 0) {
             def totalDocs = list.size()
             def buffer = []
@@ -1063,15 +1064,17 @@ class ImportService implements GrailsConfigurationAware {
                     }
                 }
 
-                def currentConservationStatusYear = item[yearJsonFieldName]
-                if (currentConservationStatusYear) {
-                    Integer lastUpdatedYear = conservationStatusYearMap.get(taxonDoc.guid)
-                    if ((lastUpdatedYear && (currentConservationStatusYear > lastUpdatedYear)) || !lastUpdatedYear) {
-                        updateSolrDoc(taxonDoc, item, jsonFieldName, solrFieldName, buffer, drUid, unmatchedTaxaCount)
-                        conservationStatusYearMap.put((String) taxonDoc.guid, currentConservationStatusYear)
+                def year = item[yearJsonFieldName]
+
+                Integer lastUpdatedYear = conservationStatusYearMap[taxonDoc?.guid]
+
+                if (!lastUpdatedYear || year > lastUpdatedYear) {
+
+                    conservationStatusYearMap[taxonDoc.guid] = year
+
+                    if (updateSolrDoc(taxonDoc, item, jsonFieldName, solrFieldName, year, yearSolrField, buffer, drUid)) {
+                        unmatchedTaxaCount++
                     }
-                } else {
-                    updateSolrDoc(taxonDoc, item, jsonFieldName, solrFieldName, buffer, drUid, unmatchedTaxaCount)
                 }
 
                 if (i > 0) {
@@ -1089,7 +1092,7 @@ class ImportService implements GrailsConfigurationAware {
         }
     }
 
-    private void updateSolrDoc(taxonDoc, item, String jsonFieldName, String solrFieldName, ArrayList buffer, String drUid, int unmatchedTaxaCount) {
+    private boolean updateSolrDoc(taxonDoc, item, String jsonFieldName, String solrFieldName, Integer year, String yearSolrFieldName, ArrayList buffer, String drUid) {
         if (taxonDoc) {
             // do a SOLR doc (atomic) update
             def doc = [:]
@@ -1098,29 +1101,31 @@ class ImportService implements GrailsConfigurationAware {
             doc["guid"] = ["set": taxonDoc.guid] // required field
             def fieldValue = item[jsonFieldName]
             doc[solrFieldName] = ["set": fieldValue] // "set" lets SOLR know to update record
+            doc[yearSolrFieldName] = ["set": year] // "set" lets SOLR know to update record
             log.debug "adding to doc = ${doc}"
             buffer << doc
-        } else {
-            // No match so add it as a vernacular name
-            def capitaliser = TitleCapitaliser.create(commonNameDefaultLanguage)
-            def doc = [:]
-            doc["id"] = UUID.randomUUID().toString() // doc key
-            doc["idxtype"] = IndexDocType.TAXON.name() // required field
-            doc["guid"] = "ALA_${item.name?.replaceAll("[^A-Za-z0-9]+", "_")}"
-            // replace non alpha-numeric chars with '_' - required field
-            doc["datasetID"] = drUid
-            doc["datasetName"] = "Conservation list for ${solrFieldName}"
-            doc["name"] = capitaliser.capitalise(item.name)
-            doc["status"] = legislatedStatus?.status ?: "legislated"
-            doc["priority"] = legislatedStatus?.priority ?: 500
-            // set conservationStatus facet
-            def fieldValue = item[jsonFieldName]
-            doc[solrFieldName] = fieldValue
-            log.info "New name doc = ${doc}"
-            buffer << doc
-            log("No existing taxon found for ${item.name}, so has been added as ${doc["guid"]}")
-            unmatchedTaxaCount++
+            return false
         }
+        // No match so add it as a vernacular name
+        def capitaliser = TitleCapitaliser.create(commonNameDefaultLanguage)
+        def doc = [:]
+        doc["id"] = UUID.randomUUID().toString() // doc key
+        doc["idxtype"] = IndexDocType.TAXON.name() // required field
+        doc["guid"] = "ALA_${item.name?.replaceAll("[^A-Za-z0-9]+", "_")}"
+        // replace non alpha-numeric chars with '_' - required field
+        doc["datasetID"] = drUid
+        doc["datasetName"] = "Conservation list for ${solrFieldName}"
+        doc["name"] = capitaliser.capitalise(item.name)
+        doc["status"] = legislatedStatus?.status ?: "legislated"
+        doc["priority"] = legislatedStatus?.priority ?: 500
+        // set conservationStatus facet
+        def fieldValue = item[jsonFieldName]
+        doc[solrFieldName] = fieldValue
+        doc[yearSolrFieldName] = year
+        log.info "New name doc = ${doc}"
+        buffer << doc
+        log("No existing taxon found for ${item.name}, so has been added as ${doc["guid"]}")
+        return true;
     }
 
     private void importAdditionalVernacularNames(List list, Map<String, Term> mapping, String defaultLanguage, String defaultStatus, String uid, boolean online) {

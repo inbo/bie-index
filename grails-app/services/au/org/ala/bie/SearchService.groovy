@@ -750,8 +750,17 @@ class SearchService {
         def clists = listService.conservationLists() ?: []
         def conservationStatus = clists.inject([:], { ac, cl ->
             final cs = taxon[cl.field]
-            if (cs)
-                ac.put(cl.label, [ dr: cl.uid, status: cs ])
+            if (cs) {
+                def attributesMap = [dr: cl.uid, status: cs]
+
+                final y = taxon[cl.yearField]
+
+                if (y) {
+                    attributesMap.year = y
+                }
+
+                ac[cl.label] = attributesMap
+            }
             ac
         })
 
