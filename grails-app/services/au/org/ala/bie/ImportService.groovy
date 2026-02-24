@@ -1064,16 +1064,23 @@ class ImportService implements GrailsConfigurationAware {
                     }
                 }
 
-                def year = item[yearJsonFieldName]
+                String year = item[yearJsonFieldName]
 
-                Integer lastUpdatedYear = conservationStatusYearMap[taxonDoc?.guid]
-
-                if (!lastUpdatedYear || year > lastUpdatedYear) {
-
-                    conservationStatusYearMap[taxonDoc.guid] = year
-
+                if (!year) {
                     if (updateSolrDoc(taxonDoc, item, jsonFieldName, solrFieldName, year, yearSolrField, buffer, drUid)) {
                         unmatchedTaxaCount++
+                    }
+                } else {
+
+                    String lastUpdatedYear = conservationStatusYearMap[taxonDoc?.guid]
+
+                    if (!lastUpdatedYear || year.toInteger() > lastUpdatedYear.toInteger()) {
+
+                        conservationStatusYearMap[taxonDoc.guid] = year
+
+                        if (updateSolrDoc(taxonDoc, item, jsonFieldName, solrFieldName, year, yearSolrField, buffer, drUid)) {
+                            unmatchedTaxaCount++
+                        }
                     }
                 }
 
@@ -1092,7 +1099,7 @@ class ImportService implements GrailsConfigurationAware {
         }
     }
 
-    private boolean updateSolrDoc(taxonDoc, item, String jsonFieldName, String solrFieldName, Integer year, String yearSolrFieldName, ArrayList buffer, String drUid) {
+    private boolean updateSolrDoc(taxonDoc, item, String jsonFieldName, String solrFieldName, String year, String yearSolrFieldName, ArrayList buffer, String drUid) {
         if (taxonDoc) {
             // do a SOLR doc (atomic) update
             def doc = [:]
