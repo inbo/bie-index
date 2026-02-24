@@ -855,7 +855,7 @@ class ImportService implements GrailsConfigurationAware {
              if (uid && solrField) {
                 log("Loading list from: " + uid)
                 try {
-                    def list = listService.get(uid, [sourceField, kingdomField, phylumField, classField, orderField, familyField, rankField])
+                    def list = listService.get(uid, [sourceField, yearSourceField, kingdomField, phylumField, classField, orderField, familyField, rankField])
                     updateDocsWithConservationStatus(list, sourceField, solrField, yearSourceField, yearSolrField, uid, kingdomField, phylumField, classField, orderField, familyField, rankField, online)
                 } catch (Exception ex) {
                     def msg = "Error calling webservice: ${ex.message}"
