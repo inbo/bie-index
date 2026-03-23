@@ -11,7 +11,7 @@ package au.org.ala.bie.util
  *  * "huiskat" -> "Huiskat"
  */
 class VBPTitleCapitaliser {
-    static String capitalize(String input){
+    static String capitalise(String input){
         if (!input) {
             return input
         }
