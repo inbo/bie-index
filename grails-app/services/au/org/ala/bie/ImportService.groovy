@@ -19,7 +19,6 @@ import au.org.ala.bie.indexing.WeightBuilder
 import au.org.ala.bie.search.IndexDocType
 import au.org.ala.bie.util.Encoder
 import au.org.ala.bie.util.TitleCapitaliser
-import au.org.ala.bie.util.VBPTitleCapitaliser
 import au.org.ala.names.model.ALAParsedName
 import au.org.ala.names.model.RankType
 import au.org.ala.names.model.TaxonomicType
@@ -1493,7 +1492,6 @@ class ImportService implements GrailsConfigurationAware {
             def provenanceList = provenance?.split("\\|").collect({ it.trim() })
             String labels = record.value(ALATerm.labels)
             def priority = status?.priority ?: commonStatus.priority
-            vernacularName = VBPTitleCapitaliser.capitalise(vernacularName)
             def doc = [:]
             doc["id"] = UUID.randomUUID().toString() // doc key
             doc["idxtype"] = IndexDocType.COMMON.name() // required field
