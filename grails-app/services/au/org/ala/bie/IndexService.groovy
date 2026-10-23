@@ -391,6 +391,11 @@ class IndexService implements GrailsConfigurationAware {
     /**
      * Extract the active core names of a collection (or of the collections an alias
      * points to) from a cluster status response.
+     * <p>
+     * The cluster section of a CLUSTERSTATUS response is a NamedList (not a Map),
+     * while the collection, shard and replica details below it are plain maps parsed
+     * from the cluster state JSON. Replicas record the core name in their 'core'
+     * property; the map key is the core_node znode name.
      *
      * @param collection The collection or alias name to look for
      * @param cluster The cluster section of a CLUSTERSTATUS response
@@ -398,14 +403,20 @@ class IndexService implements GrailsConfigurationAware {
      * @return The core names of the active replicas, or null if the collection is not present
      */
     static List<String> activeCores(String collection, cluster) {
-        def collections = ((Map) cluster)?.get('collections') as Map
-        def entry = collections?.find { name, details ->
-            name == collection || (details?.aliases instanceof Collection && collection in details.aliases)
+        def collections = cluster?.get('collections')
+        for (def i = 0; collections != null && i < collections.size(); i++) {
+            def details = collections.getVal(i)
+            def aliases = details.aliases
+            if (collections.getName(i) == collection || (aliases instanceof Collection && collection in aliases)) {
+                def cores = []
+                (details.shards ?: [:]).values().each { shard ->
+                    def replicas = shard.replicas ?: [:]
+                    cores.addAll(replicas.values().findAll { it.state == 'active' }.collect { it.core ?: it.name })
+                }
+                return cores
+            }
         }
-        if (entry == null)
-            return null
-        def replicas = ((Map) entry.value).get('replicas') as Map
-        return replicas.values().findAll { it.state == 'active' }*.name
+        return null
     }
 
     /**

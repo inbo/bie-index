@@ -5,6 +5,7 @@ import grails.testing.services.ServiceUnitTest
 import org.apache.solr.client.solrj.SolrClient
 import org.apache.solr.client.solrj.impl.XMLResponseParser
 import org.apache.solr.client.solrj.response.QueryResponse
+import org.apache.solr.common.util.SimpleOrderedMap
 import spock.lang.Specification
 
 /**
@@ -59,19 +60,48 @@ class IndexServiceSpec extends Specification implements ServiceUnitTest<IndexSer
     }
 
     void "test activeCores"() {
-        expect:
-        IndexService.activeCores(collection, cluster) == cores
+        given:
+        // The cluster section of a CLUSTERSTATUS response is a NamedList whose
+        // collection/shard/replica details are plain maps parsed from the cluster
+        // state JSON, e.g. collections = { bie-a = { shards = { shard1 = {
+        // replicas = { core_node3 = { core = '...', state = 'active' } } } } } }
+        def collections = new SimpleOrderedMap<>()
+        collections.add('bie-efs-a', [
+            aliases: ['bie'],
+            shards: [
+                shard6: [replicas: [
+                    core_node20: [core: 'bie-efs-a_shard6_replica_n20', state: 'active'],
+                    core_node22: [core: 'bie-efs-a_shard6_replica_n22', state: 'down']
+                ]]
+            ]
+        ])
+        def cluster = new SimpleOrderedMap<>()
+        cluster.add('collections', collections)
 
-        where:
-        collection    | cluster                                                                                                                            | cores
-        'bie'         | null                                                                                                                               | null
-        'bie'         | [collections: [:]]                                                                                                                 | null
-        'bie'         | [collections: [bie: [replicas: [core_node1: [name: 'bie_replica_n1', state: 'down']]]]]                                            | []
-        'bie'         | [collections: [bie: [replicas: [core_node1: [name: 'bie_replica_n1', state: 'active'], core_node2: [name: 'bie_replica_n2', state: 'down']]]]] | ['bie_replica_n1']
-        // An alias resolves to the collection it points to
-        'bie'         | [collections: ['bie-efs-a': [aliases: ['bie'], replicas: [core_node23: [name: 'bie-efs-a_shard6_replica_n20', state: 'active']]]]] | ['bie-efs-a_shard6_replica_n20']
-        // A real collection name also matches
-        'bie-efs-a'   | [collections: ['bie-efs-a': [aliases: ['bie'], replicas: [core_node23: [name: 'bie-efs-a_shard6_replica_n20', state: 'active']]]]] | ['bie-efs-a_shard6_replica_n20']
+        expect:
+        // The collection name matches
+        IndexService.activeCores('bie-efs-a', cluster) == ['bie-efs-a_shard6_replica_n20']
+        // ... and so does an alias pointing at it
+        IndexService.activeCores('bie', cluster) == ['bie-efs-a_shard6_replica_n20']
+        // All shards contribute their active replicas
+        collections.add('bie-offline', [shards: [
+            shard1: [replicas: [core_node2: [core: 'bie-efs-b_shard1_replica_n2', state: 'active']]],
+            shard2: [replicas: [core_node4: [core: 'bie-efs-b_shard2_replica_n3', state: 'down']]]
+        ]])
+        IndexService.activeCores('bie-offline', cluster) == ['bie-efs-b_shard1_replica_n2']
+        // Replicas record the core name in 'core', falling back to 'name'
+        collections.add('plain', [shards: [shard1: [replicas: [core_node1: [name: 'plain_shard1_replica_n1', state: 'active']]]]])
+        IndexService.activeCores('plain', cluster) == ['plain_shard1_replica_n1']
+    }
+
+    void "test activeCores missing collection"() {
+        given:
+        def cluster = new SimpleOrderedMap<>()
+        cluster.add('collections', new SimpleOrderedMap<>())
+
+        expect:
+        IndexService.activeCores('bie', null) == null
+        IndexService.activeCores('bie', cluster) == null
     }
 
 }
