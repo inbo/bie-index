@@ -46,4 +46,32 @@ class IndexServiceSpec extends Specification implements ServiceUnitTest<IndexSer
         'resources/luke-response-acceptedConceptID.xml' | ['acceptedConceptID']
     }
 
+    void "test coresByShard"() {
+        expect:
+        IndexService.coresByShard(cores) == groups
+
+        where:
+        cores                                                                                               | groups
+        []                                                                                                  | [:]
+        ['bie-efs-a_shard2_replica_n4']                                                                     | ['bie-efs-a_shard2': ['bie-efs-a_shard2_replica_n4']]
+        ['bie-efs-a_shard6_replica_n20', 'bie-efs-a_shard2_replica_n4', 'bie-efs-a_shard6_replica_n22']     | ['bie-efs-a_shard6': ['bie-efs-a_shard6_replica_n20', 'bie-efs-a_shard6_replica_n22'], 'bie-efs-a_shard2': ['bie-efs-a_shard2_replica_n4']]
+        ['bie']                                                                                             | ['bie': ['bie']]
+    }
+
+    void "test activeCores"() {
+        expect:
+        IndexService.activeCores(collection, cluster) == cores
+
+        where:
+        collection    | cluster                                                                                                                            | cores
+        'bie'         | null                                                                                                                               | null
+        'bie'         | [collections: [:]]                                                                                                                 | null
+        'bie'         | [collections: [bie: [replicas: [core_node1: [name: 'bie_replica_n1', state: 'down']]]]]                                            | []
+        'bie'         | [collections: [bie: [replicas: [core_node1: [name: 'bie_replica_n1', state: 'active'], core_node2: [name: 'bie_replica_n2', state: 'down']]]]] | ['bie_replica_n1']
+        // An alias resolves to the collection it points to
+        'bie'         | [collections: ['bie-efs-a': [aliases: ['bie'], replicas: [core_node23: [name: 'bie-efs-a_shard6_replica_n20', state: 'active']]]]] | ['bie-efs-a_shard6_replica_n20']
+        // A real collection name also matches
+        'bie-efs-a'   | [collections: ['bie-efs-a': [aliases: ['bie'], replicas: [core_node23: [name: 'bie-efs-a_shard6_replica_n20', state: 'active']]]]] | ['bie-efs-a_shard6_replica_n20']
+    }
+
 }
