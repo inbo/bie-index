@@ -2973,16 +2973,13 @@ class ImportService implements GrailsConfigurationAware {
      * @param online Use the online index
      */
     def buildSuggestIndex(boolean online) {
-         log("Building suggestion index")
-        try {
-            def response = indexService.buildSuggestIndex(online)
-            log.info(response.toString())
-        } catch (Exception ex) {
-            log("Exception building suggestion index: ${ex.getMessage()}")
-            log.error("Unable to build suggestion index", ex)
+        log("Building suggestion index")
+        def responses = indexService.buildSuggestIndex(online) { core, completed, total ->
+            log("Built suggestion index on ${core} (${completed}/${total})")
+            updateProgressBar(total, completed)
         }
+        log.info("Built suggestion index on ${responses.keySet()}")
         log("Finished building suggestion index")
-
     }
 
     /**

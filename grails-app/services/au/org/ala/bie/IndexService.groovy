@@ -7,14 +7,22 @@ import grails.config.Config
 import grails.core.support.GrailsConfigurationAware
 import org.apache.solr.client.solrj.SolrQuery
 import org.apache.solr.client.solrj.SolrRequest
+import org.apache.solr.client.solrj.impl.HttpSolrClient
+import org.apache.solr.client.solrj.request.CollectionAdminRequest
 import org.apache.solr.client.solrj.request.CoreAdminRequest
 import org.apache.solr.client.solrj.response.QueryResponse
 import org.apache.solr.common.SolrDocument
 import org.apache.solr.common.SolrInputDocument
+import org.apache.solr.common.params.CommonParams
 import org.apache.solr.common.params.CoreAdminParams
 import org.apache.solr.common.params.CursorMarkParams
 import org.apache.solr.common.params.ModifiableSolrParams
 import org.apache.solr.common.params.SolrParams
+
+import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The interface to SOLR based logic.
@@ -32,6 +40,9 @@ class IndexService implements GrailsConfigurationAware {
     String searchDefType
     String searchBoost
     List<String> searchQf
+
+    /** Socket timeout when building suggesters; a build can take substantially longer than a query */
+    private static final long SUGGEST_BUILD_TIMEOUT = 60 * 60 * 1000L
 
     @Override
     void setConfiguration(Config config) {
@@ -305,17 +316,104 @@ class IndexService implements GrailsConfigurationAware {
 
     /**
      * Build the suggestion index
+     * <p>
+     * A single distributed suggest.build request only builds the suggester on the one
+     * replica per shard that the coordinating node picks, leaving the other replicas
+     * unbuilt (they then throw "suggester was not built" on every autocomplete request
+     * that lands on them). So look up every active core of the collection and build
+     * each one directly, one replica per shard at a time, so that a replica of every
+     * shard remains available while its sibling is being built.
      *
      * @param online Use the online index
+     * @param progress Called with (core name, cores completed, total cores) as each core completes
      *
-     * @return The build response
+     * @return The build responses, keyed by core name
      */
-    QueryResponse buildSuggestIndex(boolean online) {
-        def query = suggestTemplate.getCopy()
+    Map<String, QueryResponse> buildSuggestIndex(boolean online, Closure progress = null) {
+        def connection = online ? liveSolrClient.connection : offlineSolrClient.connection
+        def collection = connection.tokenize('/').last()
+        def cores = collectionCores(collection)
+        if (!cores)
+            throw new IllegalStateException("No active cores found for collection ${collection}")
+        def shardGroups = coresByShard(cores).values()
+        // Builds can run far longer than the normal query timeout, so use a dedicated client
+        def client = new HttpSolrClient.Builder(adminSolrClient.connection)
+            .withSocketTimeout(SUGGEST_BUILD_TIMEOUT)
+            .build()
+        def pool = Executors.newFixedThreadPool(shardGroups.size())
+        def results = new ConcurrentHashMap<String, Object>()
+        def completed = new AtomicInteger()
+        try {
+            def futures = shardGroups.collect { group ->
+                pool.submit({
+                    group.each { core ->
+                        def query = suggestTemplate.getCopy()
+                        query.setRequestHandler('/suggest')
+                        query.set('suggest.build', "true")
+                        query.set(CommonParams.DISTRIB, "false")
+                        try {
+                            results.put(core, client.query(core, query))
+                        } catch (Exception ex) {
+                            log.error("Unable to build suggester on core ${core}", ex)
+                            results.put(core, ex)
+                        }
+                        progress?.call(core, completed.incrementAndGet(), cores.size())
+                    }
+                } as Callable)
+            }
+            futures.each { it.get() }
+        } finally {
+            pool.shutdown()
+            client.close()
+        }
+        def failed = results.findAll { it.value instanceof Exception }
+        if (failed)
+            throw new IllegalStateException("Unable to build suggester on ${failed.keySet().join(', ')}; see bie-index logs for details")
+        return results as Map<String, QueryResponse>
+    }
 
-        query.setRequestHandler('/suggest')
-        query.set('suggest.build', "true")
-        return this.query(query, online)
+    /**
+     * Get the active cores of the named collection from the cluster status.
+     * Collection aliases are resolved, so an alias name can be supplied.
+     *
+     * @param collection The collection or alias name
+     *
+     * @return The core names of the active replicas
+     */
+    List<String> collectionCores(String collection) {
+        def response = new CollectionAdminRequest.ClusterStatus().setCollectionName(collection).process(adminSolrClient.client)
+        def cores = activeCores(collection, response.getResponse().get('cluster'))
+        if (cores == null)
+            throw new IllegalStateException("Collection ${collection} not found in cluster status")
+        return cores
+    }
+
+    /**
+     * Extract the active core names of a collection (or of the collections an alias
+     * points to) from a cluster status response.
+     *
+     * @param collection The collection or alias name to look for
+     * @param cluster The cluster section of a CLUSTERSTATUS response
+     *
+     * @return The core names of the active replicas, or null if the collection is not present
+     */
+    static List<String> activeCores(String collection, cluster) {
+        def collections = ((Map) cluster)?.get('collections') as Map
+        def entry = collections?.find { name, details ->
+            name == collection || (details?.aliases instanceof Collection && collection in details.aliases)
+        }
+        if (entry == null)
+            return null
+        def replicas = ((Map) entry.value).get('replicas') as Map
+        return replicas.values().findAll { it.state == 'active' }*.name
+    }
+
+    /**
+     * Group core names by shard, so that replicas of the same shard can be built one
+     * after the other (bie-efs-a_shard6_replica_n22 is grouped under bie-efs-a_shard6)
+     */
+    static Map<String, List<String>> coresByShard(List<String> cores) {
+        return cores.groupBy { core -> core.replaceAll('_replica_.*$', '') }
     }
 
     private boolean isList(object) {
