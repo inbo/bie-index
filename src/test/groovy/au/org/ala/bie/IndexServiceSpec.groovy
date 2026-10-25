@@ -65,33 +65,28 @@ class IndexServiceSpec extends Specification implements ServiceUnitTest<IndexSer
         // collection/shard/replica details are plain maps parsed from the cluster
         // state JSON, e.g. collections = { bie-a = { shards = { shard1 = {
         // replicas = { core_node3 = { core = '...', state = 'active' } } } } } }
+        // Solr resolves aliases before building the response, so a request for the
+        // alias 'bie' returns bie-a, WITHOUT a per-collection 'aliases' property
         def collections = new SimpleOrderedMap<>()
-        collections.add('bie-efs-a', [
-            aliases: ['bie'],
+        collections.add('bie-a', [
             shards: [
-                shard6: [replicas: [
-                    core_node20: [core: 'bie-efs-a_shard6_replica_n20', state: 'active'],
-                    core_node22: [core: 'bie-efs-a_shard6_replica_n22', state: 'down']
-                ]]
+                shard1: [replicas: [core_node3: [core: 'bie-a_shard1_replica_n1', state: 'active']]],
+                shard2: [replicas: [core_node5: [core: 'bie-a_shard2_replica_n2', state: 'active']]],
+                shard3: [replicas: [core_node7: [core: 'bie-a_shard3_replica_n4', state: 'down']]]
             ]
         ])
         def cluster = new SimpleOrderedMap<>()
         cluster.add('collections', collections)
+        cluster.add('aliases', ['bie': 'bie-a', 'bie-offline': 'bie-a'])
 
         expect:
-        // The collection name matches
-        IndexService.activeCores('bie-efs-a', cluster) == ['bie-efs-a_shard6_replica_n20']
-        // ... and so does an alias pointing at it
-        IndexService.activeCores('bie', cluster) == ['bie-efs-a_shard6_replica_n20']
-        // All shards contribute their active replicas
-        collections.add('bie-offline', [shards: [
-            shard1: [replicas: [core_node2: [core: 'bie-efs-b_shard1_replica_n2', state: 'active']]],
-            shard2: [replicas: [core_node4: [core: 'bie-efs-b_shard2_replica_n3', state: 'down']]]
-        ]])
-        IndexService.activeCores('bie-offline', cluster) == ['bie-efs-b_shard1_replica_n2']
+        IndexService.activeCores(cluster) == ['bie-a_shard1_replica_n1', 'bie-a_shard2_replica_n2']
+        // An alias spanning several collections contributes all of their cores
+        collections.add('bie-b', [shards: [shard1: [replicas: [core_node9: [core: 'bie-b_shard1_replica_n1', state: 'active']]]]])
+        IndexService.activeCores(cluster) == ['bie-a_shard1_replica_n1', 'bie-a_shard2_replica_n2', 'bie-b_shard1_replica_n1']
         // Replicas record the core name in 'core', falling back to 'name'
         collections.add('plain', [shards: [shard1: [replicas: [core_node1: [name: 'plain_shard1_replica_n1', state: 'active']]]]])
-        IndexService.activeCores('plain', cluster) == ['plain_shard1_replica_n1']
+        IndexService.activeCores(cluster).last() == 'plain_shard1_replica_n1'
     }
 
     void "test activeCores missing collection"() {
@@ -100,8 +95,9 @@ class IndexServiceSpec extends Specification implements ServiceUnitTest<IndexSer
         cluster.add('collections', new SimpleOrderedMap<>())
 
         expect:
-        IndexService.activeCores('bie', null) == null
-        IndexService.activeCores('bie', cluster) == null
+        // An alias pointing at a non-existent collection leaves the response empty
+        IndexService.activeCores(cluster) == null
+        IndexService.activeCores(null) == null
     }
 
 }

@@ -374,7 +374,7 @@ class IndexService implements GrailsConfigurationAware {
 
     /**
      * Get the active cores of the named collection from the cluster status.
-     * Collection aliases are resolved, so an alias name can be supplied.
+     * Collection aliases are resolved by Solr, so an alias name can be supplied.
      *
      * @param collection The collection or alias name
      *
@@ -382,41 +382,42 @@ class IndexService implements GrailsConfigurationAware {
      */
     List<String> collectionCores(String collection) {
         def response = new CollectionAdminRequest.ClusterStatus().setCollectionName(collection).process(adminSolrClient.client)
-        def cores = activeCores(collection, response.getResponse().get('cluster'))
+        def cores = activeCores(response.getResponse().get('cluster'))
         if (cores == null)
             throw new IllegalStateException("Collection ${collection} not found in cluster status")
+        log.info("Suggester build targets for ${collection}: ${cores}")
         return cores
     }
 
     /**
-     * Extract the active core names of a collection (or of the collections an alias
-     * points to) from a cluster status response.
+     * Extract the active core names of the collection(s) in a cluster status response.
      * <p>
-     * The cluster section of a CLUSTERSTATUS response is a NamedList (not a Map),
-     * while the collection, shard and replica details below it are plain maps parsed
-     * from the cluster state JSON. Replicas record the core name in their 'core'
-     * property; the map key is the core_node znode name.
+     * Solr resolves the collection parameter of a CLUSTERSTATUS request before
+     * building the response, so the collections it contains are exactly the
+     * collection(s) that the requested name or alias refers to. (The per-collection
+     * 'aliases' property is only present when the request names the collection
+     * directly, so it cannot be used to match an alias.) The cluster section of the
+     * response is a NamedList, while the collection, shard and replica details below
+     * it are plain maps parsed from the cluster state JSON. Replicas record the core
+     * name in their 'core' property; the map key is the core_node znode name.
      *
-     * @param collection The collection or alias name to look for
      * @param cluster The cluster section of a CLUSTERSTATUS response
      *
-     * @return The core names of the active replicas, or null if the collection is not present
+     * @return The core names of the active replicas, or null if there are no collections
      */
-    static List<String> activeCores(String collection, cluster) {
+    static List<String> activeCores(cluster) {
         def collections = cluster?.get('collections')
-        for (def i = 0; collections != null && i < collections.size(); i++) {
+        if (collections == null || collections.size() == 0)
+            return null
+        def cores = []
+        for (def i = 0; i < collections.size(); i++) {
             def details = collections.getVal(i)
-            def aliases = details.aliases
-            if (collections.getName(i) == collection || (aliases instanceof Collection && collection in aliases)) {
-                def cores = []
-                (details.shards ?: [:]).values().each { shard ->
-                    def replicas = shard.replicas ?: [:]
-                    cores.addAll(replicas.values().findAll { it.state == 'active' }.collect { it.core ?: it.name })
-                }
-                return cores
+            (details.shards ?: [:]).values().each { shard ->
+                def replicas = shard.replicas ?: [:]
+                cores.addAll(replicas.values().findAll { it.state == 'active' }.collect { it.core ?: it.name })
             }
         }
-        return null
+        return cores
     }
 
     /**
