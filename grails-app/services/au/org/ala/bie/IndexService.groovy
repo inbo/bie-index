@@ -41,8 +41,8 @@ class IndexService implements GrailsConfigurationAware {
     String searchBoost
     List<String> searchQf
 
-    /** Socket timeout when building suggesters; a build can take substantially longer than a query */
-    private static final long SUGGEST_BUILD_TIMEOUT = 60 * 60 * 1000L
+    /** Socket timeout in ms when building suggesters; a build can take substantially longer than a query. Must be an int: HttpSolrClient.Builder.withSocketTimeout takes an int. */
+    private static final int SUGGEST_BUILD_TIMEOUT = 60 * 60 * 1000
 
     @Override
     void setConfiguration(Config config) {
